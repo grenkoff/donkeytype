@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>donkeytype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="logo">donkey<span>type</span></div>
+    <div id="progress" class="progress"></div>
+    <nav>
+      <button id="nav-train" class="active" title="train">train</button>
+      <button id="nav-stats" title="stats">stats</button>
+      <button id="nav-settings" title="settings">settings</button>
+    </nav>
+  </header>
+
+  <main id="view-train">
+    <div id="start" class="start">press any key to start listening</div>
+    <div id="status" class="status"></div>
+    <div id="words" class="words"></div>
+    <div id="layout-warning" class="warning hidden">switch your keyboard layout to English</div>
+    <div id="result" class="result hidden">
+      <div id="result-text" class="result-text"></div>
+      <div id="result-meta" class="result-meta"></div>
+      <div id="result-items" class="chips"></div>
+      <div id="levelup" class="levelup hidden"></div>
+    </div>
+    <div class="hints">
+      <span><kbd>tab</kbd> replay</span>
+      <span><kbd>shift</kbd>+<kbd>tab</kbd> slow</span>
+      <span><kbd>enter</kbd> check / next</span>
+      <span><kbd>esc</kbd> give up</span>
+    </div>
+  </main>
+
+  <main id="view-stats" class="hidden page">
+    <h2>accuracy &amp; speed</h2>
+    <div id="chart" class="chart"></div>
+    <div class="columns">
+      <section>
+        <h2>needs work</h2>
+        <div id="struggling" class="chips"></div>
+      </section>
+      <section>
+        <h2>recently learned</h2>
+        <div id="learned" class="chips"></div>
+      </section>
+    </div>
+  </main>
+
+  <main id="view-settings" class="hidden page">
+    <label class="row">
+      <span>vocabulary level <small>(most frequent words unlocked; grows automatically)</small></span>
+      <input id="set-level" type="number" min="50" max="25000" step="10">
+    </label>
+    <label class="row">
+      <span>speech speed <small id="speed-value"></small></span>
+      <input id="set-speed" type="range" min="0.6" max="1.3" step="0.05">
+    </label>
+    <label class="row check">
+      <input id="set-live" type="checkbox">
+      <span>live feedback <small>(color letters while typing)</small></span>
+    </label>
+    <label class="row check">
+      <input id="set-mask" type="checkbox">
+      <span>show word slots <small>(how many words and letters)</small></span>
+    </label>
+    <div class="row">
+      <span>voices <small>(a random one is used for each sentence)</small></span>
+      <div id="set-voices" class="voices"></div>
+    </div>
+    <p id="llm-note" class="note"></p>
+    <p class="note">Sentences: <a href="https://tatoeba.org" target="_blank">Tatoeba</a> (CC BY 2.0 FR).
+      Voice: Kokoro-82M. Phrases: Wiktionary.</p>
+  </main>
+
+  <script src="app.js" type="module"></script>
+</body>
+</html>
