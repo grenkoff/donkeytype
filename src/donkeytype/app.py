@@ -6,6 +6,7 @@ import threading
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -170,13 +171,16 @@ store = Store()
 tts = TTS()
 filler = llm.Filler(store)
 trainer = Trainer(store, tts, filler)
-app = FastAPI(title="donkeytype")
 
 
-@app.on_event("startup")
-def startup() -> None:
+@asynccontextmanager
+async def lifespan(_: FastAPI):
     filler.start()
-    trainer.top_up()
+    trainer.top_up()  # select and synthesize the first sentences before the user asks
+    yield
+
+
+app = FastAPI(title="donkeytype", lifespan=lifespan)
 
 
 class Submission(BaseModel):

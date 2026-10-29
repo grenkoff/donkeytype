@@ -50,7 +50,12 @@ MAX_SENTENCE_RANK = 25000
 MIN_WIKT_PHRASE_COUNT = 8
 MIN_NGRAM_COUNT = 60
 MIN_NGRAM_PMI = 1.5
+COMMON_RANK = 300  # phrases made only of words this common need MIN_NGRAM_PMI
 MAX_NGRAM = 5
+# Template-heavy contributions (mostly about Algeria with invented names).
+EXCLUDED_OWNERS = {"Amastan"}
+EXCLUDED_WORDS = {"ziri", "yanni", "rima", "skura", "algeria", "algerian", "algerians", "algiers",
+                  "kabyle", "kabylie", "berber", "berbers", "tamazight", "mennad", "baya"}
 PLACEHOLDERS = {"one's", "someone", "someone's", "something", "somebody", "oneself", "sb", "sth"}
 
 
@@ -95,13 +100,17 @@ def candidate_sentences():
     with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
-            if len(parts) < 4 or parts[3] not in natives:
+            if len(parts) < 4 or parts[3] not in natives or parts[3] in EXCLUDED_OWNERS:
                 continue
             text = clean(parts[2])
             if not ALLOWED_CHARS.fullmatch(text):
                 continue
             words = [w for _, _, w in word_spans(text)]
-            if not MIN_WORDS <= len(words) <= MAX_WORDS or any(map(is_british, words)):
+            if (
+                not MIN_WORDS <= len(words) <= MAX_WORDS
+                or any(map(is_british, words))
+                or EXCLUDED_WORDS.intersection(words)
+            ):
                 continue
             key = " ".join(words)
             if key in seen:
@@ -125,11 +134,35 @@ def tokenize_corpus() -> None:
     tmp.rename(TOKENS)
 
 
+_excluded: set[int] | None = None
+
+
+def excluded_ids() -> set[int]:
+    """Sentences dropped by filters added after tokens.jsonl was made."""
+    global _excluded
+    if _excluded is None:
+        _excluded = set()
+        with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt") as f:
+            for line in f:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) >= 4 and (
+                    parts[3] in EXCLUDED_OWNERS or EXCLUDED_WORDS.intersection(word_spans_lower(parts[2]))
+                ):
+                    _excluded.add(int(parts[0]))
+    return _excluded
+
+
+def word_spans_lower(text: str) -> list[str]:
+    return [w for _, _, w in word_spans(clean(text))]
+
+
 def read_tokens():
+    excluded = excluded_ids()
     with open(TOKENS) as f:
         for line in f:
             tid, text, tokens = json.loads(line)
-            yield tid, text, [tuple(t) for t in tokens]
+            if tid not in excluded:
+                yield tid, text, [tuple(t) for t in tokens]
 
 
 # --- 3. lexicon ------------------------------------------------------------------
@@ -154,10 +187,14 @@ def rank_lemmas() -> tuple[dict, dict, list[float], Counter, dict]:
     wf = {form: word_frequency(form, "en") for form in form_total}
     known = [f for f in form_total if wf[f] > 0]
     scale = sum(wf[f] for f in known) / sum(form_total[f] for f in known)
-    lemma_freq: Counter = Counter()
+    general: Counter = Counter()
     for (form, lemma), c in form_lemma.items():
         freq = wf[form] or form_total[form] * scale
-        lemma_freq[lemma] += freq * c / form_total[form]
+        general[lemma] += freq * c / form_total[form]
+    # wordfreq leans on written text (news, Wikipedia); Tatoeba is conversational.
+    # The geometric mean favors words common in both, i.e. in everyday speech.
+    corpus_total = sum(lemma_count.values())
+    lemma_freq = Counter({l: math.sqrt(general[l] * lemma_count[l] / corpus_total) for l in general})
     ranked = [l for l, _ in lemma_freq.most_common() if lemma_count[l] >= MIN_LEMMA_COUNT]
     ranks = {lemma: i + 1 for i, lemma in enumerate(ranked)}
     freqs = [lemma_freq[l] for l in ranked]
@@ -194,8 +231,8 @@ def wiktionary_phrases() -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
     return result
 
 
-def corpus_ngrams() -> dict[tuple[str, ...], tuple[int, float]]:
-    """Frequent lemma n-grams that hold together better than their parts (min split PMI)."""
+def ngram_counts() -> tuple[dict[int, Counter], int]:
+    """Counts of frequent lemma n-grams (all their sub-n-grams are frequent too)."""
     counts: dict[int, Counter] = {}
     total = 0
     for n in range(1, MAX_NGRAM + 1):
@@ -212,25 +249,48 @@ def corpus_ngrams() -> dict[tuple[str, ...], tuple[int, float]]:
                         c[g] += 1
         counts[n] = Counter({g: v for g, v in c.items() if v >= MIN_NGRAM_COUNT})
         log(f"  {n}-grams with count >= {MIN_NGRAM_COUNT}: {len(counts[n])}")
-    result = {}
-    for n in range(2, MAX_NGRAM + 1):
-        for g, c in counts[n].items():
-            pmi = min(
-                math.log(c * total / (counts[k][g[:k]] * counts[n - k][g[k:]]))
-                for k in range(1, n)
-            )
-            if pmi >= MIN_NGRAM_PMI and not is_fragment(g):
-                result[g] = (c, pmi)
-    log(f"corpus n-gram phrases: {len(result)}")
-    return result
+    return counts, total
 
 
-FRAGMENT_EDGES = {"the", "a", "an", "and", "or", "but", "be", "my", "your", "his", "her", "their", "our", "its"}
+def min_split_pmi(g: tuple[str, ...], counts: dict[int, Counter], total: int) -> float | None:
+    """How much better a lemma sequence holds together than its weakest split; None if unknown."""
+    n = len(g)
+    if n > MAX_NGRAM or g not in counts[n]:
+        return None
+    return min(
+        math.log(counts[n][g] * total / (counts[k][g[:k]] * counts[n - k][g[k:]]))
+        for k in range(1, n)
+    )
 
 
-def is_fragment(g: tuple[str, ...]) -> bool:
-    return g[-1] in FRAGMENT_EDGES or g[0] in {"and", "or", "but"}
+FUNCTION_WORDS = set("""
+    a an the this that these those some any no every each all both either neither another such what which who
+    whom whose i you he she it we they me him her us them my your his its our their mine yours myself
+    be have do will would shall should can could may might must not to of in on at by for with from about
+    as into onto than then and or but if because so though although while when where how why there here
+    up out off over very too also just still really even only well yes oh
+""".split())
+BAD_ENDINGS = set("""
+    the a an this that i he she we they my your his her its our their very so too really still also just
+    no and or but because
+""".split())
 
+
+def is_fragment(g: tuple[str, ...], kind: str = "chunk") -> bool:
+    """Spans like "to the", "said he", "is very" or "to get" are not phrases worth learning."""
+    if kind in ("idiom", "phrasal_verb"):
+        return False
+    if "do that" in " ".join(g):  # Tatoeba's countless "... to do that" templates
+        return True
+    if g[-1] in BAD_ENDINGS or g[0] in {"and", "or", "but", "that"}:
+        return True
+    if kind == "chunk":
+        return (
+            g[-1] in {"be", "have", "do"}
+            or (len(g) == 2 and g[0] in {"to", "a", "the"})
+            or all(w in FUNCTION_WORDS for w in g)
+        )
+    return False
 
 def build_lexicon() -> None:
     ranks, forms, freqs, lemma_count, free = rank_lemmas()
@@ -242,10 +302,12 @@ def build_lexicon() -> None:
             continue
         keys[lemma_key] = keys.setdefault(surface_key, len(groups))
         groups.append({"kind": kind, "lemmas": lemma_key, "keys": {lemma_key, surface_key}})
-    for key in corpus_ngrams():
-        if key not in keys:
-            keys[key] = len(groups)
-            groups.append({"kind": "chunk", "lemmas": key, "keys": {key}})
+    counts, total = ngram_counts()
+    for n in range(2, MAX_NGRAM + 1):
+        for key in counts[n]:
+            if key not in keys and not is_fragment(key) and min_split_pmi(key, counts, total) >= MIN_NGRAM_PMI:
+                keys[key] = len(groups)
+                groups.append({"kind": "chunk", "lemmas": key, "keys": {key}})
 
     # Count phrase occurrences (sentences) and their surface forms.
     lex = Lexicon(lemmas={l: (0, r) for l, r in ranks.items()}, propn=free, lemma_freqs=freqs)
@@ -289,6 +351,19 @@ def build_lexicon() -> None:
         if words_rank >= lex.unknown_rank:
             continue
         label = surfaces[gid].most_common(1)[0][0]
+        if len(word_spans(label)) < 2:
+            continue  # "don't", "I'm": one typed word, already covered by its lemmas
+        lemmas = group["lemmas"]
+        if group["kind"] != "chunk":
+            # Wiktionary entries made of very common words ("be in", "to go") match
+            # literal uses everywhere: keep them only if they really hold together.
+            pmi = min_split_pmi(lemmas, counts, total)
+            if is_fragment(lemmas, group["kind"]):
+                continue
+            if all(w in FUNCTION_WORDS for w in lemmas) and group["kind"] == "multiword":
+                continue
+            if words_rank <= COMMON_RANK and pmi is not None and pmi < MIN_NGRAM_PMI:
+                continue
         if label in by_label:  # e.g. "look up" and "look-up": merge into the more frequent
             by_label[label]["keys"] += [list(k) for k in group["keys"]]
             continue
@@ -296,8 +371,18 @@ def build_lexicon() -> None:
             "keys": [list(k) for k in group["keys"]], "label": label, "kind": group["kind"],
             "count": c, "rank": max(words_rank, rank_of_count(c)),
         }
-    phrases = list(by_label.values())
-    log(f"phrases kept: {len(phrases)}")
+    # Drop chunks that almost only occur inside a longer phrase ("lot of" in "a lot of").
+    kept = list(by_label.values())
+    best_super: Counter = Counter()  # sub-phrase label -> count of its most frequent super-phrase
+    for p in kept:
+        w = p["label"].split()
+        for i in range(len(w)):
+            for j in range(i + 2, len(w) + 1):
+                if j - i < len(w):
+                    sub = " ".join(w[i:j])
+                    best_super[sub] = max(best_super[sub], p["count"])
+    phrases = [p for p in kept if p["kind"] != "chunk" or best_super[p["label"]] < 0.8 * p["count"]]
+    log(f"phrases kept: {len(phrases)} ({Counter(p['kind'] for p in phrases)})")
 
     LEXICON.write_text(json.dumps({
         "lemmas": [
