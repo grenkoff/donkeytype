@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 donkeytype = "donkeytype.app:main"
 donkeytype-build = "donkeytype.build.corpus:main"
+donkeytype-setup = "donkeytype.setup:main"
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]

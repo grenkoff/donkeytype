@@ -51,7 +51,7 @@ def fetch_all(out: Path) -> None:
         for kind, category in CATEGORIES.items():
             result[kind] = fetch_category(client, category)
             print(f"{kind}: {len(result[kind])}")
-    out.write_text(json.dumps(result))
+    out.write_text(json.dumps(result), encoding="utf-8")
 
 
 if __name__ == "__main__":

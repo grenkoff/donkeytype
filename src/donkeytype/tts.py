@@ -61,4 +61,4 @@ class TTS:
         samples, rate = self.kokoro.create(text, voice=voice, speed=speed, lang="en-us")
         tmp = self.path(name).with_suffix(".tmp")
         sf.write(tmp, samples, rate, format="OGG", subtype="OPUS")
-        tmp.rename(self.path(name))
+        tmp.replace(self.path(name))

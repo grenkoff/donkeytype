@@ -15,7 +15,8 @@ import math
 import random
 import re
 import sqlite3
-import subprocess
+import tarfile
+import sys
 import time
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -33,6 +34,7 @@ from ..analysis import (
     tokenize,
 )
 from ..text import clean, is_british, word_spans
+from ..setup import download as fetch
 from .wiktionary import fetch_all as fetch_wiktionary
 
 BUILD = config.DATA / "build"
@@ -71,12 +73,13 @@ def download() -> None:
     sentences = config.RAW / "eng_sentences_detailed.tsv.bz2"
     if not sentences.exists():
         log("downloading Tatoeba sentences")
-        subprocess.run(["curl", "-sSLo", sentences, TATOEBA_URL], check=True)
+        fetch(TATOEBA_URL, sentences)
     if not (config.RAW / "user_languages.csv").exists():
         log("downloading Tatoeba user languages")
         archive = config.RAW / "user_languages.tar.bz2"
-        subprocess.run(["curl", "-sSLo", archive, USERS_URL], check=True)
-        subprocess.run(["tar", "xjf", archive.name], cwd=config.RAW, check=True)
+        fetch(USERS_URL, archive)
+        with tarfile.open(archive, "r:bz2") as tar:
+            tar.extract("user_languages.csv", config.RAW, filter="data")
     if not WIKTIONARY.exists():
         log("fetching Wiktionary phrase titles (takes a few minutes)")
         fetch_wiktionary(WIKTIONARY)
@@ -86,7 +89,7 @@ def download() -> None:
 
 
 def native_speakers() -> set[str]:
-    with open(config.RAW / "user_languages.csv", newline="") as f:
+    with open(config.RAW / "user_languages.csv", newline="", encoding="utf-8") as f:
         return {
             row[2]
             for row in csv.reader(f, delimiter="\t")
@@ -97,7 +100,7 @@ def native_speakers() -> set[str]:
 def candidate_sentences():
     natives = native_speakers()
     seen: set[str] = set()
-    with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt") as f:
+    with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt", encoding="utf-8") as f:
         for line in f:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 4 or parts[3] not in natives or parts[3] in EXCLUDED_OWNERS:
@@ -124,14 +127,14 @@ def tokenize_corpus() -> None:
     sentences = list(candidate_sentences())
     log(f"tokenizing {len(sentences)} sentences")
     tmp = TOKENS.with_suffix(".tmp")
-    with open(tmp, "w") as out:
+    with open(tmp, "w", encoding="utf-8") as out:
         texts = (text for _, text in sentences)
-        for i, doc in enumerate(nlp().pipe(texts, batch_size=1000, n_process=3)):
+        for i, doc in enumerate(nlp().pipe(texts, batch_size=1000, n_process=1 if sys.platform == "win32" else 3)):
             tid, text = sentences[i]
             out.write(json.dumps([tid, text, tokenize(doc)], separators=(",", ":")) + "\n")
             if i % 200_000 == 0:
                 log(f"  {i}")
-    tmp.rename(TOKENS)
+    tmp.replace(TOKENS)
 
 
 _excluded: set[int] | None = None
@@ -142,7 +145,7 @@ def excluded_ids() -> set[int]:
     global _excluded
     if _excluded is None:
         _excluded = set()
-        with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt") as f:
+        with bz2.open(config.RAW / "eng_sentences_detailed.tsv.bz2", "rt", encoding="utf-8") as f:
             for line in f:
                 parts = line.rstrip("\n").split("\t")
                 if len(parts) >= 4 and (
@@ -158,7 +161,7 @@ def word_spans_lower(text: str) -> list[str]:
 
 def read_tokens():
     excluded = excluded_ids()
-    with open(TOKENS) as f:
+    with open(TOKENS, encoding="utf-8") as f:
         for line in f:
             tid, text, tokens = json.loads(line)
             if tid not in excluded:
@@ -209,7 +212,7 @@ def rank_lemmas() -> tuple[dict, dict, list[float], Counter, dict]:
 
 def wiktionary_phrases() -> list[tuple[str, tuple[str, ...], tuple[str, ...]]]:
     """(category, lemma key, surface key) of Wiktionary multiword entries."""
-    data = json.loads(WIKTIONARY.read_text())
+    data = json.loads(WIKTIONARY.read_text(encoding="utf-8"))
     titles: dict[str, str] = {}
     for kind in ("multiword", "phrase", "prep_phrase", "idiom", "phrasal_verb"):
         for title in data[kind]:
@@ -393,7 +396,7 @@ def build_lexicon() -> None:
         "freqs": freqs,
         "free_names": list(free),
         "phrases": phrases,
-    }))
+    }), encoding="utf-8")
 
 
 # --- 4. write --------------------------------------------------------------------
@@ -478,7 +481,7 @@ def update_avail_ranks(db: sqlite3.Connection) -> None:
 
 
 def write_db() -> None:
-    data = json.loads(LEXICON.read_text())
+    data = json.loads(LEXICON.read_text(encoding="utf-8"))
     tmp = config.CORPUS_DB.with_suffix(".tmp")
     tmp.unlink(missing_ok=True)
     db = sqlite3.connect(tmp)
@@ -515,7 +518,7 @@ def write_db() -> None:
     db.commit()
     db.execute("VACUUM")
     db.close()
-    tmp.rename(config.CORPUS_DB)
+    tmp.replace(config.CORPUS_DB)
     log(f"wrote {config.CORPUS_DB}")
 
 
