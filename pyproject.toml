@@ -1,0 +1,35 @@
+[project]
+name = "donkeytype"
+version = "0.1.0"
+description = "Listen-and-type trainer for English: dictation sentences built from the most frequent words and phrases"
+readme = "README.md"
+authors = [
+    { name = "Alexander Grenkov", email = "a.grenkov@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "en-core-web-sm",
+    "fastapi>=0.162.0",
+    "httpx>=0.28.1",
+    "kokoro-onnx>=0.6.1",
+    "soundfile>=0.14.0",
+    "spacy>=3.8.18",
+    "uvicorn[standard]>=0.54.0",
+    "wordfreq>=3.1.1",
+]
+
+[project.scripts]
+donkeytype = "donkeytype.app:main"
+donkeytype-build = "donkeytype.build.corpus:main"
+
+[build-system]
+requires = ["uv_build>=0.11.7,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+]
